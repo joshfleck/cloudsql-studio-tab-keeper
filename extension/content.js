@@ -1,9 +1,84 @@
 (() => {
     'use strict';
 
-    const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
     const SAVE_DELAY_MS = 1000;
     const MAX_LINES = 5000;
+    const TOAST_MS = 5000;
+    const FADE_MS = 300;
+    // Monaco renders spaces inside lines as non-breaking spaces.
+    const NBSP = String.fromCharCode(160);
+
+    // Published into the page by bridge.js, which can read chrome.storage.
+    const settings = () => {
+        try {
+            return JSON.parse(document.documentElement.dataset.studioTabKeeper || '{}');
+        } catch {
+            return {};
+        }
+    };
+
+    const CARD_STYLE =
+        'display:flex;gap:10px;align-items:center;padding:12px 16px;background:#202124;color:#fff;' +
+        'font:14px/1.4 Roboto,sans-serif;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.45);' +
+        `pointer-events:auto;opacity:1;transition:opacity ${FADE_MS}ms ease`;
+
+    const fadeOut = element => {
+        element.style.pointerEvents = 'none';
+        element.style.opacity = '0';
+        setTimeout(() => element.remove(), FADE_MS);
+    };
+
+    const makeCloseButton = onClick => {
+        const button = document.createElement('button');
+        button.textContent = '×';
+        button.setAttribute('aria-label', 'Dismiss');
+        button.style.cssText =
+            'flex:none;cursor:pointer;border:0;background:transparent;color:#9aa0a6;font:22px/1 Roboto,sans-serif;padding:0 0 0 4px';
+        button.onclick = onClick;
+        return button;
+    };
+
+    // Top-center, over the console header's search bar (nothing there needs
+    // to stay visible): notices and the restore banner stack here instead of
+    // overlapping, and the banner stays clear of the editor's tabs and toolbar.
+    let overlay = null;
+    const getOverlay = () => {
+        if (!overlay?.isConnected) {
+            overlay = document.createElement('div');
+            overlay.style.cssText =
+                'position:fixed;top:2px;left:50%;transform:translateX(-50%);z-index:2147483647;display:flex;' +
+                'flex-direction:column;align-items:center;gap:8px;pointer-events:none';
+            document.body.append(overlay);
+        }
+        return overlay;
+    };
+
+    let toast = null;
+    let toastTimer = null;
+
+    const hideToast = () => {
+        clearTimeout(toastTimer);
+        if (!toast) return;
+        fadeOut(toast);
+        toast = null;
+    };
+
+    const showToast = message => {
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.style.cssText = CARD_STYLE;
+            const check = document.createElement('span');
+            check.textContent = '✓';
+            check.style.cssText =
+                'flex:none;width:22px;height:22px;border-radius:50%;background:#34a853;color:#fff;' +
+                'font:bold 14px/22px Roboto,sans-serif;text-align:center';
+            toast.append(check, document.createElement('span'), makeCloseButton(hideToast));
+            getOverlay().prepend(toast);
+        }
+        toast.children[1].textContent = message;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(hideToast, TOAST_MS);
+    };
 
     // The console is a single-page app, so the script is injected on every
     // console page and only acts while the current route is a Studio page.
@@ -72,7 +147,7 @@
     const renderedLines = () =>
         [...document.querySelectorAll('.monaco-editor .view-lines .view-line')]
             .sort((a, b) => parseFloat(a.style.top) - parseFloat(b.style.top))
-            .map(line => line.textContent.replace(/ /g, ' '));
+            .map(line => line.textContent.replaceAll(NBSP, ' '));
 
     const visibleText = () => renderedLines().join('\n');
 
@@ -133,9 +208,6 @@
             state.previous = state.current;
         }
         state.current = { at: Date.now(), tabs: [] };
-        if (state.previous && Date.now() - state.previous.at > MAX_AGE_MS) {
-            delete state.previous;
-        }
         writeState(state);
     };
 
@@ -158,9 +230,13 @@
             if (storageKey() !== key || activeIndex() !== index || editorRoot()?.dataset.uri !== modelUri) return;
             const state = readState();
             const tabs = state.current?.tabs ?? [];
+            if (tabs[index] === text) return;
             tabs[index] = text;
             state.current = { at: Date.now(), tabs };
             writeState(state);
+            if (settings().notifyOnSave) {
+                showToast(`Saved tab ${index + 1} (${text.split('\n').length} lines)`);
+            }
         } finally {
             saving = false;
         }
@@ -173,10 +249,38 @@
 
     const isEditorInput = event => event.target?.matches?.('.monaco-editor textarea');
 
-    // Monaco handles paste and cut itself without firing an input event.
+    // Keys that move the cursor or only modify other keys never change the text.
+    const NON_EDITING_KEYS = new Set([
+        'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown',
+        'Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Escape',
+    ]);
+    const isNonEditingKey = event =>
+        NON_EDITING_KEYS.has(event.key) ||
+        ((event.metaKey || event.ctrlKey) && ['a', 'c', 'f'].includes(event.key.toLowerCase()));
+
+    // Monaco handles paste and cut itself without firing an input event, and
+    // undo/redo are keyboard shortcuts, so keyup is watched as well.
     for (const type of ['input', 'keyup', 'paste', 'cut', 'drop']) {
-        document.addEventListener(type, event => isEditorInput(event) && scheduleSave(), true);
+        document.addEventListener(
+            type,
+            event => {
+                if (!isEditorInput(event) || (type === 'keyup' && isNonEditingKey(event))) return;
+                scheduleSave();
+            },
+            true,
+        );
     }
+
+    // Toolbar buttons that rewrite the editor text without any keyboard event.
+    const EDITING_BUTTONS = new Set(['Format', 'Clear']);
+    document.addEventListener(
+        'click',
+        event => {
+            const button = event.target.closest?.('button');
+            if (button && EDITING_BUTTONS.has(button.textContent.trim())) scheduleSave();
+        },
+        true,
+    );
 
     // A pending save must finish before Studio swaps the editor to another tab's model.
     let replayingClick = false;
@@ -249,19 +353,34 @@
     let bannerKey = null;
     let restoring = false;
 
+    // Databases whose banner the user closed with the X; not offered again until the page reloads.
+    const dismissedKeys = new Set();
+
     const dismissBanner = () => {
-        banner?.remove();
+        if (banner) fadeOut(banner);
         banner = null;
         bannerKey = null;
+    };
+
+    const runRestore = async (previous, database) => {
+        const count = previous.tabs.filter(sql => sql?.trim()).length;
+        restoring = true;
+        try {
+            await restoreTabs(previous.tabs);
+            const after = readState();
+            delete after.previous;
+            writeState(after);
+        } finally {
+            restoring = false;
+        }
+        showToast(`Restored ${count} tab${count === 1 ? '' : 's'} for "${database}"`);
     };
 
     const showBanner = (previous, database) => {
         const count = previous.tabs.filter(sql => sql?.trim()).length;
         banner = document.createElement('div');
         bannerKey = storageKey();
-        banner.style.cssText =
-            'position:fixed;right:16px;bottom:16px;z-index:2147483647;padding:10px 12px;background:#202124;color:#fff;' +
-            'font:13px/1.4 Roboto,sans-serif;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.4);display:flex;gap:8px;align-items:center';
+        banner.style.cssText = CARD_STYLE;
         const label = document.createElement('span');
         label.textContent =
             `Restore ${count} saved tab${count === 1 ? '' : 's'} for "${database}" ` +
@@ -273,15 +392,10 @@
         for (const button of [restore, discard]) {
             button.style.cssText = 'cursor:pointer;border:0;border-radius:4px;padding:4px 10px;font:inherit';
         }
-        restore.onclick = async () => {
-            const state = readState();
+        restore.onclick = () => {
+            const saved = readState().previous ?? previous;
             dismissBanner();
-            restoring = true;
-            await restoreTabs(state.previous?.tabs ?? []);
-            const after = readState();
-            delete after.previous;
-            writeState(after);
-            restoring = false;
+            runRestore(saved, database);
         };
         discard.onclick = () => {
             const state = readState();
@@ -289,8 +403,12 @@
             writeState(state);
             dismissBanner();
         };
-        banner.append(label, restore, discard);
-        document.body.append(banner);
+        const close = makeCloseButton(() => {
+            dismissedKeys.add(bannerKey);
+            dismissBanner();
+        });
+        banner.append(label, restore, discard, close);
+        getOverlay().append(banner);
     };
 
     // Studio can also drop its tabs in place (back to the database login
@@ -318,6 +436,8 @@
         rotateStaleSession();
         if (tabsWereLost()) rotateStaleSession({ force: true });
         const { previous } = readState();
-        if (hasContent(previous)) showBanner(previous, database);
+        if (!hasContent(previous)) return;
+        if (settings().autoRestore) runRestore(previous, database);
+        else if (!dismissedKeys.has(storageKey())) showBanner(previous, database);
     }, 2000);
 })();

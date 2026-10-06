@@ -1,10 +1,20 @@
 {
     "manifest_version": 3,
     "name": "Cloud SQL Studio tab keeper",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "description": "Keeps Cloud SQL Studio editor tabs per database and offers to restore them after the database login expires.",
     "minimum_chrome_version": "111",
+    "permissions": ["storage"],
+    "action": {
+        "default_title": "Cloud SQL Studio tab keeper",
+        "default_popup": "popup.html"
+    },
     "content_scripts": [
+        {
+            "matches": ["https://console.cloud.google.com/*"],
+            "js": ["defaults.js", "bridge.js"],
+            "run_at": "document_start"
+        },
         {
             "matches": ["https://console.cloud.google.com/*"],
             "js": ["content.js"],

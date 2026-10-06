@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <title>Cloud SQL Studio tab keeper</title>
+        <style>
+            body {
+                width: 300px;
+                margin: 12px;
+                font: 13px/1.4 system-ui, sans-serif;
+            }
+            label {
+                display: flex;
+                gap: 8px;
+                align-items: flex-start;
+                margin-bottom: 10px;
+            }
+            small {
+                display: block;
+                color: #5f6368;
+            }
+        </style>
+    </head>
+    <body>
+        <label>
+            <input type="checkbox" id="autoRestore" />
+            <span>
+                Restore tabs automatically
+                <small>Skip the prompt and restore saved tabs as soon as you log into the database.</small>
+            </span>
+        </label>
+        <label>
+            <input type="checkbox" id="notifyOnSave" />
+            <span>
+                Show a notice when tabs are saved
+                <small>A brief message at the top of the page after each save.</small>
+            </span>
+        </label>
+        <script src="defaults.js"></script>
+        <script src="popup.js"></script>
+    </body>
+</html>
