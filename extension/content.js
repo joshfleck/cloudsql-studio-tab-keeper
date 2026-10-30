@@ -300,19 +300,28 @@
         true,
     );
 
+    let closingTab = false;
+
     document.addEventListener(
         'click',
         async event => {
-            const close = event.target.closest?.('button[aria-label="Close tab"]');
+            const close =event.target.closest?.('button[aria-label="Close tab"]');
             if (!close || !storageKey()) return;
             const tab = close.closest('button[role=tab]');
             const index = queryTabs().indexOf(tab);
             const before = queryTabs().length;
-            await sleep(700);
-            if (index < 0 || queryTabs().length >= before) return;
-            const state = readState();
-            state.current?.tabs?.splice(index, 1);
-            writeState(state);
+            // Until the saved list drops this tab, fewer live tabs than saved
+            // must not be mistaken for Studio having lost its tabs.
+            closingTab = true;
+            try {
+                await sleep(700);
+                if (index < 0 || queryTabs().length >= before) return;
+                const state = readState();
+                state.current?.tabs?.splice(index, 1);
+                writeState(state);
+            } finally {
+                closingTab = false;
+            }
         },
         true,
     );
@@ -432,7 +441,7 @@
             console.info(`[studio-tab-keeper] tracking tabs for database "${database}"`);
         }
         if (banner && bannerKey !== storageKey()) dismissBanner();
-        if (banner || restoring || saveTimer !== null || !database || !queryTabs().length) return;
+        if (banner || restoring || closingTab || saveTimer !== null || !database || !queryTabs().length) return;
         rotateStaleSession();
         if (tabsWereLost()) rotateStaleSession({ force: true });
         const { previous } = readState();
